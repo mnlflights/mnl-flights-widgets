@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBS METAR Overlay - Ver 1.5.1 Auto</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;500;600&display=swap');
+        
+        body {
+            width: 1920px;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: transparent;
+        }
+
+        .param-set {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: flex;
+            align-items: center;
+            height: 100%;
+            width: 100%;
+            /* Initial state: Fully offset to the left, hidden behind the airport-box */
+            transform: translateX(-100%); 
+            transition: transform 0.7s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            z-index: 10;
+        }
+
+        .param-set.is-visible {
+            /* Visible state: Slide into the wrapper area */
+            transform: translateX(0);
+        }
+
+        .text-border {
+            text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5);
+        }
+
+        @keyframes pulse-red {
+            0%, 100% { color: #fff; text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5); }
+            50% { color: #ff4d4d; text-shadow: -1px -1px 0 rgba(255,0,0,0.5), 1px -1px 0 rgba(255,0,0,0.5), -1px 1px 0 rgba(255,0,0,0.5), 1px 1px 0 rgba(255,0,0,0.5); }
+        }
+        .wind-shear-pulse {
+            animation: pulse-red 1s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Main Widget Container -->
+    <div id="metar-widget" class="fixed w-auto h-[100px] flex items-center justify-start text-white" style="margin: 10px;">
+        
+        <!-- Loading / Status State -->
+        <div id="status-container" class="flex items-center justify-center px-4 py-2 bg-black/20 rounded-lg">
+            <div id="loading-spinner" class="flex items-center text-xl font-bold">
+                <svg class="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span id="status-text" class="text-sm italic">Initializing Avionics...</span>
+            </div>
+        </div>
+
+        <!-- Live Data Display -->
+        <div id="data-container" class="hidden h-full flex flex-row flex-nowrap items-center justify-start px-2 py-2 overflow-visible">
+            
+            <!-- Airport Identity Box - High z-index to stay on top of the animation -->
+            <div id="airport-box" class="relative z-30 flex-shrink-0 flex flex-col items-start p-3 bg-[#58B1E3] rounded-lg shadow-sm h-full justify-around overflow-hidden">
+                <p id="airport-codes-display" class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none whitespace-nowrap"></p>
+                <p id="airport-name-display" class="text-xl font-bold leading-tight whitespace-nowrap"></p>
+                <p id="airport-location-display" class="text-base font-normal text-white leading-tight whitespace-nowrap"></p>
+            </div>
+
+            <!-- Animation wrapper correctly positioned to the right -->
+            <div id="animation-wrapper" class="relative z-10 h-full overflow-hidden w-[392px] -ml-2">
+                <!-- SET 1: Temp, Wind, Weather -->
+                <div id="param-set-1" class="param-set">
+                    <div class="flex flex-col items-center p-2 bg-gray-800/20 h-full justify-center gap-y-1 w-24 pl-5">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Temp</span>
+                        <p id="temperature" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                    <div class="w-px h-10 bg-black/40"></div>
+                    <div class="flex flex-col items-center p-2 bg-gray-800/20 h-full justify-center gap-y-1 w-36">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Wind</span>
+                        <p id="wind-speed" class="text-xl font-medium leading-tight text-center w-full text-border"></p>
+                    </div>
+                    <div class="w-px h-10 bg-black/40"></div>
+                    <div class="flex flex-col items-center p-2 bg-gray-800/20 rounded-r-lg h-full justify-center gap-y-1 flex-grow px-4">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Weather</span>
+                        <p id="weather" class="text-xl font-medium text-center whitespace-nowrap text-border"></p>
+                    </div>
+                </div>
+                <!-- SET 2: Time, Runway, X-Wind -->
+                <div id="param-set-2" class="param-set">
+                    <div class="flex flex-col items-center p-2 bg-gray-800/20 h-full justify-center gap-y-1 w-24 pl-5">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Time</span>
+                        <p id="local-time" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                    <div class="w-px h-10 bg-black/40"></div>
+                    <div class="flex flex-col items-center p-2 bg-gray-800/20 h-full justify-center gap-y-1 w-24">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Runway</span>
+                        <p id="runway-in-use" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                    <div class="w-px h-10 bg-black/40"></div>
+                    <!-- ADJUSTED: X-Wind box width increased to w-36 for consistency with Wind box -->
+                    <div class="flex flex-col items-center p-2 bg-gray-800/20 rounded-r-lg h-full justify-center gap-y-1 w-36">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">X-Wind</span>
+                        <p id="x-wind" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Failure Message -->
+        <div id="message-box" class="absolute inset-0 bg-red-800 flex flex-col items-center justify-center rounded-lg hidden z-50 p-4 border-2 border-white">
+            <p id="message-text" class="text-lg font-bold text-white text-center leading-tight"></p>
+            <button onclick="window.location.reload()" class="mt-4 px-4 py-2 bg-white text-red-800 font-bold rounded-lg transition">Reconnect</button>
+        </div>
+    </div>
+
+    <script>
+        // --- HARD-CODED CONFIGURATION ---
+        const ICAO_CONFIG = "RPLL";
+        const RUNWAY_CONFIG = "24 & 31"; 
+        const LOCATION_CONFIG = "Manila, Philippines";
+        const REFRESH_RATE = 5 * 60 * 1000; // 5 minutes
+
+        const API_KEY = "TMsAiM6fbv41ya5UPOJKD31n8yn50CRb";
+        const BASE_URL = "https://api.metar-taf.com/metar";
+        const PROXIES = [
+            "https://corsproxy.io/?",
+            "https://api.allorigins.win/raw?url=",
+            "https://thingproxy.freeboard.io/fetch/",
+            "https://api.codetabs.com/v1/proxy?quest="
+        ];
+
+        let animationTimeouts = []; 
+        let currentAirportTimezone = null; 
+
+        // DOM Elements
+        const statusContainer = document.getElementById('status-container');
+        const statusText = document.getElementById('status-text');
+        const dataContainer = document.getElementById('data-container');
+        const airportNameDisplay = document.getElementById('airport-name-display');
+        const temperatureElement = document.getElementById('temperature');
+        const localTimeElement = document.getElementById('local-time');
+        const windSpeedElement = document.getElementById('wind-speed'); 
+        const weatherElement = document.getElementById('weather'); 
+        const runwayInUseElement = document.getElementById('runway-in-use');
+        const xWindElement = document.getElementById('x-wind');
+        const paramSet1 = document.getElementById('param-set-1');
+        const paramSet2 = document.getElementById('param-set-2');
+        const airportCodesDisplay = document.getElementById('airport-codes-display');
+        const airportLocationDisplay = document.getElementById('airport-location-display');
+        const messageBox = document.getElementById('message-box');
+        const messageText = document.getElementById('message-text');
+
+        function updateLiveClock() {
+            if (currentAirportTimezone === null) return;
+            const now = new Date();
+            const utcMilliseconds = now.getTime();
+            const offsetMilliseconds = currentAirportTimezone * 1000;
+            const targetTime = new Date(utcMilliseconds + offsetMilliseconds);
+            const hours = String(targetTime.getUTCHours()).padStart(2, '0');
+            const minutes = String(targetTime.getUTCMinutes()).padStart(2, '0');
+            const seconds = String(targetTime.getUTCSeconds()).padStart(2, '0');
+            localTimeElement.textContent = `${hours}:${minutes}:${seconds}`;
+        }
+
+        function stopAnimationLoop() {
+            animationTimeouts.forEach(clearTimeout);
+            animationTimeouts = [];
+            paramSet1.classList.remove('is-visible');
+            paramSet2.classList.remove('is-visible');
+        }
+
+        function startAnimationLoop() {
+            stopAnimationLoop();
+            const cycle = () => {
+                paramSet1.classList.add('is-visible');
+                animationTimeouts.push(setTimeout(() => {
+                    paramSet1.classList.remove('is-visible');
+                    animationTimeouts.push(setTimeout(() => {
+                        paramSet2.classList.add('is-visible');
+                        animationTimeouts.push(setTimeout(() => {
+                            paramSet2.classList.remove('is-visible');
+                            animationTimeouts.push(setTimeout(cycle, 1000));
+                        }, 20000));
+                    }, 1000));
+                }, 20000));
+            };
+            cycle();
+        }
+
+        function calculateCrosswind(windDir, windSpeed, rwyInput) {
+            if (windDir === null || windDir === -1 || !windSpeed || !rwyInput) return "0";
+            const rwyMatch = rwyInput.match(/\d+/);
+            const rwyNum = rwyMatch ? parseInt(rwyMatch[0]) : 6;
+            const rwyHeading = rwyNum * 10;
+            const angleDiff = (windDir - rwyHeading) * (Math.PI / 180);
+            return Math.abs(Math.round(windSpeed * Math.sin(angleDiff)));
+        }
+
+        function getRenderedWidth(element) {
+            const clone = element.cloneNode(true);
+            clone.style.visibility = 'hidden'; clone.style.position = 'absolute';
+            clone.style.transform = 'translateX(0)';
+            document.body.appendChild(clone);
+            const width = clone.scrollWidth;
+            document.body.removeChild(clone);
+            return width;
+        }
+
+        async function fetchMetar(isRefresh = false) {
+            const cacheBuster = `&t=${Date.now()}`;
+            const targetPath = `${BASE_URL}?api_key=${API_KEY}&v=2.3&id=${ICAO_CONFIG}&locale=en-US${cacheBuster}`;
+            
+            if (!isRefresh) {
+                statusText.textContent = `Linking RPLL Telemetry...`;
+            }
+
+            for (let i = 0; i < PROXIES.length; i++) {
+                try {
+                    const finalUrl = `${PROXIES[i]}${encodeURIComponent(targetPath)}`;
+                    const response = await fetch(finalUrl);
+                    if (!response.ok) throw new Error();
+                    
+                    const text = await response.text();
+                    const data = JSON.parse(text);
+                    if (data.status === 'ERROR') throw new Error();
+
+                    const { airport, metar } = data;
+                    currentAirportTimezone = airport.timezone;
+                    airportNameDisplay.textContent = airport.name;
+                    airportCodesDisplay.textContent = `${airport.iata || 'MNL'} / ${airport.icao || ICAO_CONFIG}`;
+                    airportLocationDisplay.textContent = LOCATION_CONFIG;
+                    
+                    temperatureElement.textContent = (metar.temperature !== null) ? `${metar.temperature}°C` : 'N/A';
+                    
+                    const windDirNum = metar.wind_dir;
+                    const windSpeedNum = metar.wind_speed || 0;
+                    const windDirText = (windDirNum === -1 || windDirNum === null) ? 'VRB' : `${windDirNum}°`;
+                    let windStr = `${windDirText}@${windSpeedNum}KT`;
+                    if (metar.wind_gust > 0) windStr += ` G${metar.wind_gust}KT`;
+                    windSpeedElement.textContent = windStr;
+
+                    // X-Wind Logic
+                    const xWindVal = calculateCrosswind(windDirNum, windSpeedNum, RUNWAY_CONFIG);
+                    xWindElement.textContent = `${xWindVal}KT`;
+
+                    // Wind Shear / Gust Alert
+                    const hasAlert = metar.wind_shear || (metar.recent_weather_report && metar.recent_weather_report.includes('WS')) || (metar.wind_gust >= 10);
+                    windSpeedElement.classList.toggle('wind-shear-pulse', !!hasAlert);
+
+                    // Weather Styling
+                    const weatherArr = metar.weather || metar.present_weather || [];
+                    const weatherText = (Array.isArray(weatherArr) ? weatherArr.join(', ') : weatherArr) || 'Clear/CAVOK';
+                    weatherElement.textContent = weatherText;
+                    weatherElement.classList.remove('text-yellow-400', 'text-red-500');
+                    if (weatherText.includes('TSRA') || weatherText.includes('+')) weatherElement.classList.add('text-red-500');
+                    else if (weatherText.includes('VC') || weatherText.includes('TS')) weatherElement.classList.add('text-yellow-400');
+                    
+                    runwayInUseElement.textContent = RUNWAY_CONFIG;
+
+                    if (!isRefresh) {
+                        statusContainer.classList.add('hidden');
+                        dataContainer.classList.remove('hidden');
+                        dataContainer.style.display = 'flex'; // Ensure flex layout
+                        startAnimationLoop();
+                    }
+                    return;
+
+                } catch (err) {
+                    continue;
+                }
+            }
+
+            if (!isRefresh) {
+                statusContainer.classList.add('hidden');
+                messageText.textContent = `AVIONICS FAILURE\nAll proxy routes saturated.`;
+                messageBox.classList.remove('hidden');
+            }
+        }
+
+        window.onload = () => {
+            fetchMetar();
+            setInterval(() => fetchMetar(true), REFRESH_RATE);
+            setInterval(updateLiveClock, 1000);
+        };
+    </script>
+</body>
+</html>
