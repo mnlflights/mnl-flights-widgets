@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBS METAR Overlay - Ver 1.4</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;500;600&display=swap');
+        
+        body {
+            width: 1920px;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: transparent;
+        }
+        
+        .icao-input:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px #fff, 0 0 0 4px #58B1E3;
+        }
+
+        .param-set {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: flex;
+            align-items: center;
+            height: 100%;
+            width: 100%;
+            transform: translateX(-105%); 
+            transition: transform 0.7s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            z-index: 10;
+        }
+
+        .param-set.is-visible {
+            transform: translateX(0);
+        }
+
+        .text-border {
+            text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5);
+        }
+
+        /* Wind Shear Pulse Animation */
+        @keyframes pulse-red {
+            0%, 100% { color: #fff; text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5); }
+            50% { color: #ff4d4d; text-shadow: -1px -1px 0 rgba(255,0,0,0.5), 1px -1px 0 rgba(255,0,0,0.5), -1px 1px 0 rgba(255,0,0,0.5), 1px 1px 0 rgba(255,0,0,0.5); }
+        }
+        .wind-shear-pulse {
+            animation: pulse-red 1s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="metar-widget" class="fixed w-auto h-[100px] flex items-center justify-center text-white" style="margin: 10px;">
+        
+        <div id="input-container" class="flex items-center justify-center w-full h-full p-2">
+            <form id="icao-form" class="flex flex-col items-center justify-center gap-y-2">
+                <div class="flex items-center gap-x-3">
+                    <label for="icao-code" class="text-base font-medium select-none text-white whitespace-nowrap">ICAO:</label>
+                    <input 
+                        type="text" 
+                        id="icao-code" 
+                        maxlength="4" 
+                        value="RPLL"
+                        class="icao-input px-3 py-1 w-28 text-center text-base bg-white/50 placeholder-gray-500/70 border-2 border-gray-400 rounded-lg uppercase tracking-wider text-gray-800 transition duration-200"
+                    >
+                    <label for="runway-manual-input" class="text-base font-medium select-none text-white whitespace-nowrap">Runway:</label>
+                    <input 
+                        type="text" 
+                        id="runway-manual-input" 
+                        placeholder="06/24"
+                        value="06"
+                        class="icao-input px-3 py-1 w-28 text-center text-base bg-white/50 placeholder-gray-500/70 border-2 border-gray-400 rounded-lg uppercase tracking-wider text-gray-800 transition duration-200"
+                    >
+                    <label for="location-manual-input" class="text-base font-medium select-none text-white whitespace-nowrap">Location:</label>
+                    <input 
+                        type="text" 
+                        id="location-manual-input" 
+                        value="Manila, Philippines"
+                        class="icao-input px-3 py-1 w-48 text-center text-base bg-white/50 placeholder-gray-500/70 border-2 border-gray-400 rounded-lg text-gray-800 transition duration-200"
+                    >
+                </div>
+                <div class="flex gap-x-2">
+                    <button 
+                        type="submit" 
+                        class="px-5 py-1 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-500 transition duration-200 shadow-md text-base"
+                    >
+                        Fetch
+                    </button>
+                    <button 
+                        type="button"
+                        onclick="resetUI()"
+                        class="px-5 py-1 bg-gray-600 text-white font-bold rounded-lg hover:bg-gray-500 transition duration-200 shadow-md text-base"
+                    >
+                        Reset
+                    </button>
+                </div>
+                <p id="debug-log" class="text-sm text-yellow-300 mt-1 font-bold"></p>
+            </form>
+        </div>
+
+        <div id="data-container" class="hidden w-full h-full items-center justify-start px-2 py-2">
+            <div id="loading-spinner" class="hidden flex items-center text-xl font-bold">
+                <svg class="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span id="loading-text">Loading...</span>
+            </div>
+            
+            <div id="airport-box" class="relative z-20 flex flex-col items-start p-2 bg-[#58B1E3] rounded-lg shadow-sm h-full justify-around overflow-hidden">
+                <p id="airport-codes-display" class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none whitespace-nowrap"></p>
+                <p id="airport-name-display" class="text-xl font-bold leading-tight whitespace-nowrap" title=""></p>
+                <p id="airport-location-display" class="text-base font-normal text-white leading-tight whitespace-nowrap"></p>
+            </div>
+
+            <div id="animation-wrapper" class="relative h-full overflow-hidden">
+                <!-- SET 1: Temp, Wind, Weather -->
+                <div id="param-set-1" class="param-set">
+                    <div class="flex flex-col items-center p-2 bg-gray-800/10 h-full justify-center gap-y-1 w-20">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Temp</span>
+                        <p id="temperature" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                    <div class="w-px h-10 bg-black"></div>
+                    <div class="flex flex-col items-center p-2 bg-gray-800/10 h-full justify-center gap-y-1 w-36">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Wind</span>
+                        <p id="wind-speed" class="text-xl font-medium leading-tight text-center w-full text-border" title=""></p>
+                    </div>
+                    <div class="w-px h-10 bg-black"></div>
+                    <div class="flex flex-col items-center p-2 bg-gray-800/10 rounded-r-lg h-full justify-center gap-y-1 px-4">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Weather</span>
+                        <p id="weather" class="text-xl font-medium text-center whitespace-nowrap text-border" title=""></p>
+                    </div>
+                </div>
+                <!-- SET 2: Time, Runway, X-Wind -->
+                <div id="param-set-2" class="param-set">
+                    <div class="flex flex-col items-center p-2 bg-gray-800/10 h-full justify-center gap-y-1 w-24">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Time</span>
+                        <p id="local-time" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                    <div class="w-px h-10 bg-black"></div>
+                    <div class="flex flex-col items-center p-2 bg-gray-800/10 h-full justify-center gap-y-1 w-24">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">Runway</span>
+                        <p id="runway-in-use" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                    <!-- NEW: Crosswind Display -->
+                    <div class="w-px h-10 bg-black"></div>
+                    <div class="flex flex-col items-center p-2 bg-gray-800/10 rounded-r-lg h-full justify-center gap-y-1 w-24">
+                        <span class="text-base font-semibold uppercase text-black/80 tracking-wider leading-none">X-Wind</span>
+                        <p id="x-wind" class="text-xl font-medium leading-none text-border"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="message-box" class="absolute inset-0 bg-red-800 flex flex-col items-center justify-center rounded-lg hidden z-50 p-4 border-2 border-white">
+            <p id="message-text" class="text-lg font-bold text-white text-center leading-tight"></p>
+            <div class="flex gap-x-2 mt-4">
+                <button onclick="resetUI()" class="px-4 py-2 bg-white text-red-800 font-bold rounded-lg hover:bg-gray-200 transition">
+                    Try Again
+                </button>
+                <button onclick="copyDiagnostics()" class="px-4 py-2 bg-black text-white font-bold rounded-lg hover:bg-gray-800 transition">
+                    Copy Log
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_KEY = "TMsAiM6fbv41ya5UPOJKD31n8yn50CRb";
+        const BASE_URL = "https://api.metar-taf.com/metar";
+        
+        const PROXIES = [
+            "https://corsproxy.io/?",
+            "https://api.allorigins.win/raw?url=",
+            "https://thingproxy.freeboard.io/fetch/",
+            "https://api.codetabs.com/v1/proxy?quest="
+        ];
+
+        let clockInterval = null;
+        let refreshInterval = null;
+        let animationTimeouts = []; 
+        let currentAirportTimezone = null; 
+        let lastError = "";
+
+        const form = document.getElementById('icao-form');
+        const icaoInput = document.getElementById('icao-code');
+        const runwayManualInput = document.getElementById('runway-manual-input');
+        const locationManualInput = document.getElementById('location-manual-input');
+        const inputContainer = document.getElementById('input-container');
+        const dataContainer = document.getElementById('data-container');
+        const debugLog = document.getElementById('debug-log');
+        const airportNameDisplay = document.getElementById('airport-name-display');
+        const temperatureElement = document.getElementById('temperature');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const messageBox = document.getElementById('message-box');
+        const messageText = document.getElementById('message-text');
+        const localTimeElement = document.getElementById('local-time');
+        const windSpeedElement = document.getElementById('wind-speed'); 
+        const weatherElement = document.getElementById('weather'); 
+        const runwayInUseElement = document.getElementById('runway-in-use');
+        const xWindElement = document.getElementById('x-wind');
+        const paramSet1 = document.getElementById('param-set-1');
+        const paramSet2 = document.getElementById('param-set-2');
+        const airportCodesDisplay = document.getElementById('airport-codes-display');
+        const airportLocationDisplay = document.getElementById('airport-location-display');
+        
+        function updateLiveClock() {
+            if (currentAirportTimezone === null) return;
+            const now = new Date();
+            const utcMilliseconds = now.getTime();
+            const offsetMilliseconds = currentAirportTimezone * 1000;
+            const targetTime = new Date(utcMilliseconds + offsetMilliseconds);
+            const hours = String(targetTime.getUTCHours()).padStart(2, '0');
+            const minutes = String(targetTime.getUTCMinutes()).padStart(2, '0');
+            const seconds = String(targetTime.getUTCSeconds()).padStart(2, '0');
+            localTimeElement.textContent = `${hours}:${minutes}:${seconds}`;
+        }
+
+        function resetUI() {
+            messageBox.classList.add('hidden');
+            inputContainer.style.display = 'flex';
+            dataContainer.style.display = 'none';
+            debugLog.textContent = '';
+            stopAnimationLoop();
+        }
+
+        function stopAnimationLoop() {
+            animationTimeouts.forEach(clearTimeout);
+            animationTimeouts = [];
+            paramSet1.classList.remove('is-visible');
+            paramSet2.classList.remove('is-visible');
+        }
+
+        function startAnimationLoop() {
+            const cycle = () => {
+                paramSet1.classList.add('is-visible');
+                animationTimeouts.push(setTimeout(() => {
+                    paramSet1.classList.remove('is-visible');
+                    animationTimeouts.push(setTimeout(() => {
+                        paramSet2.classList.add('is-visible');
+                        animationTimeouts.push(setTimeout(() => {
+                            paramSet2.classList.remove('is-visible');
+                            animationTimeouts.push(setTimeout(cycle, 1000));
+                        }, 20000));
+                    }, 1000));
+                }, 20000));
+            };
+            cycle();
+        }
+
+        function getRenderedWidth(element) {
+            const clone = element.cloneNode(true);
+            clone.style.visibility = 'hidden'; clone.style.position = 'absolute';
+            clone.style.transform = 'translateX(0)';
+            document.body.appendChild(clone);
+            const width = clone.scrollWidth;
+            document.body.removeChild(clone);
+            return width;
+        }
+
+        function copyDiagnostics() {
+            const diagnosticInfo = `ICAO: ${icaoInput.value}\nError: ${lastError}\nTime: ${new Date().toISOString()}\nUA: ${navigator.userAgent}`;
+            const el = document.createElement('textarea');
+            el.value = diagnosticInfo;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+            debugLog.textContent = "Log copied to clipboard!";
+        }
+
+        // NEW: Crosswind Math
+        function calculateCrosswind(windDir, windSpeed, rwyInput) {
+            if (windDir === null || windDir === -1 || !windSpeed || !rwyInput) return "0";
+            const rwyMatch = rwyInput.match(/\d+/);
+            if (!rwyMatch) return "0";
+            const rwyHeading = parseInt(rwyMatch[0]) * 10;
+            const angleDiff = (windDir - rwyHeading) * (Math.PI / 180);
+            return Math.abs(Math.round(windSpeed * Math.sin(angleDiff)));
+        }
+
+        async function fetchMetar(icaoCode, isRefresh = false) {
+            const ICAO = icaoCode.toUpperCase();
+            const cacheBuster = `&t=${Date.now()}`;
+            const targetPath = `${BASE_URL}?api_key=${API_KEY}&v=2.3&id=${ICAO}&locale=en-US${cacheBuster}`;
+            
+            if (!isRefresh) {
+                inputContainer.style.display = 'none';
+                dataContainer.style.display = 'flex';
+                loadingSpinner.style.display = 'flex';
+            }
+
+            let lastErr = "";
+            
+            for (let i = 0; i < PROXIES.length; i++) {
+                const proxy = PROXIES[i];
+                const finalUrl = `${proxy}${encodeURIComponent(targetPath)}`;
+                debugLog.textContent = `Route ${i+1}...`;
+
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+                    const response = await fetch(finalUrl, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    
+                    const text = await response.text();
+                    let data;
+                    try {
+                        data = JSON.parse(text);
+                    } catch (e) {
+                        throw new Error(`Parsing Error (Route ${i+1})`);
+                    }
+
+                    if (data.status === 'ERROR') throw new Error(data.message || "API Error");
+
+                    const { airport, metar } = data;
+                    currentAirportTimezone = airport.timezone;
+                    airportNameDisplay.textContent = airport.name;
+                    airportCodesDisplay.textContent = `${airport.iata || '??'} / ${airport.icao || ICAO}`;
+                    airportLocationDisplay.textContent = locationManualInput.value;
+                    temperatureElement.textContent = (metar.temperature !== null) ? `${metar.temperature}°C` : 'N/A';
+                    
+                    const wind = metar;
+                    const windDirNum = wind.wind_dir;
+                    const windSpeedNum = wind.wind_speed || 0;
+                    const windDir = (windDirNum === -1 || windDirNum === null) ? 'VRB' : `${windDirNum}°`;
+                    let windStr = `${windDir}@${windSpeedNum}KT`;
+                    if (wind.wind_gust > 0) windStr += ` G${wind.wind_gust}KT`;
+                    windSpeedElement.textContent = windStr;
+
+                    // UPDATED: Crosswind Calculation
+                    const xWindVal = calculateCrosswind(windDirNum, windSpeedNum, runwayManualInput.value);
+                    xWindElement.textContent = `${xWindVal}KT`;
+
+                    // Wind Shear Pulse
+                    const hasWindShear = metar.wind_shear === true || (metar.recent_weather_report && metar.recent_weather_report.includes('WS')) || (metar.wind_gust >= 10);
+                    if (hasWindShear) {
+                        windSpeedElement.classList.add('wind-shear-pulse');
+                    } else {
+                        windSpeedElement.classList.remove('wind-shear-pulse');
+                    }
+
+                    const weatherArr = metar.weather || metar.present_weather || [];
+                    const weatherText = (Array.isArray(weatherArr) ? weatherArr.join(', ') : weatherArr) || 'Clear/CAVOK';
+                    weatherElement.textContent = weatherText;
+
+                    // NEW: Weather Color Thresholds
+                    weatherElement.classList.remove('text-yellow-400', 'text-red-500');
+                    if (weatherText.includes('TSRA') || weatherText.includes('+')) {
+                        weatherElement.classList.add('text-red-500');
+                    } else if (weatherText.includes('VC') || weatherText.includes('TS')) {
+                        weatherElement.classList.add('text-yellow-400');
+                    }
+                    
+                    runwayInUseElement.textContent = runwayManualInput.value || 'N/A';
+
+                    const wrapper = document.getElementById('animation-wrapper');
+                    wrapper.style.width = `${Math.max(getRenderedWidth(paramSet1), getRenderedWidth(paramSet2))}px`;
+
+                    if (!isRefresh) startAnimationLoop();
+                    debugLog.textContent = "Telemetry Locked";
+                    loadingSpinner.style.display = 'none';
+                    return;
+
+                } catch (err) {
+                    console.warn(`Route ${i+1} failed:`, err.message);
+                    lastErr = err.message;
+                    lastError = err.message;
+                }
+            }
+
+            stopAnimationLoop();
+            messageText.textContent = `AVIONICS FAILURE:\n${lastErr}`;
+            messageBox.classList.remove('hidden');
+            loadingSpinner.style.display = 'none';
+        }
+
+        form.addEventListener('submit', e => {
+            e.preventDefault();
+            if (icaoInput.value.length === 4) fetchMetar(icaoInput.value);
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            clockInterval = setInterval(updateLiveClock, 1000);
+        });
+    </script>
+</body>
+</html>
